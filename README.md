@@ -6,7 +6,7 @@ It is built on top of EventCalendar (vkurko/calendar) and fetches events via Hom
 
 ## Installation (HACS)
 1. Open **HACS → Frontend → Custom repositories → Add** and add:
-   - **URL:** `https://github.com/<YOUR-ACCOUNT>/lovelace-local-calendars-pro`
+   - **URL:** `https://github.com/GorCed/lovelace-local-calendars-pro`
    - **Category:** `Plugin`
 2. Install **Local Calendars Pro Card**. HACS will add the resource automatically.
    - If you add it manually: **URL:** `/hacsfiles/lovelace-local-calendars-pro/local-calendars-pro.js`, **Type:** `module`
