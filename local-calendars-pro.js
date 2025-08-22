@@ -1,30 +1,21 @@
 // local-calendars-pro.js
-// A Lovelace custom card that renders Home Assistant calendars (calendar.*)
-// using EventCalendar (vkurko/calendar) with day/week/month views and per-calendar colors.
-//
-// Loads EventCalendar from local HACS files to ensure CSS works under HA.
-// If the local script fails, it falls back to CDN.
-//
-// Docs:
-// - EventCalendar usage + headerToolbar with start/center/end: https://deepwiki.com/vkurko/calendar/7.1-basic-usage
-// - HA custom card resources / plugin packaging: https://hacs.xyz/docs/publish/plugin/
+// Lovelace card for HA calendars using EventCalendar (vkurko/calendar).
+// Fixes: inject CSS into Shadow DOM; proper headerToolbar; explicit buttonText.
 
 class LocalCalendarsProCard extends HTMLElement {
-  static getStubConfig() {
-    return { title: "Calendar", default_view: "timeGridWeek", locale: "en" };
-  }
+  static getStubConfig() { return { title: "Calendar", default_view: "timeGridWeek", locale: "en" }; }
 
   setConfig(config) {
     this._config = {
       title: config.title ?? "Calendar",
-      // Views: 'timeGridDay' | 'timeGridWeek' | 'dayGridMonth'
-      default_view: config.default_view ?? "timeGridWeek",
+      default_view: config.default_view ?? "timeGridWeek", // timeGridDay|timeGridWeek|dayGridMonth
       entities: Array.isArray(config.entities) ? config.entities : null,
       locale: config.locale ?? "en",
       theme: config.theme ?? "auto",
       colors: config.colors || {}
     };
     this._ec = null;
+    this._ecCssText = null; // cache for injected CSS
     this._container = this._container || document.createElement("div");
     this._container.id = "ec-root";
     this._container.style.minHeight = "480px";
@@ -37,14 +28,14 @@ class LocalCalendarsProCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // Auto-discover calendars if not specified
-    if (!this._config?.entities) {
-      this._entities = Object.keys(hass.states).filter((e) => e.startsWith("calendar."));
-    } else {
-      this._entities = this._config.entities;
-    }
+    this._entities = this._config?.entities?.length
+      ? this._config.entities
+      : Object.keys(hass.states).filter((e) => e.startsWith("calendar."));
+
     if (!this._initStarted) {
       this._initStarted = true;
+      if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+      this._render();
       this._ensureLoaded().then(() => this._initCalendar());
     }
     this._renderLegend();
@@ -60,19 +51,25 @@ class LocalCalendarsProCard extends HTMLElement {
   getCardSize() { return 6; }
 
   async _ensureLoaded() {
-    // Inject LOCAL CSS (HACS)
-    const base = "/hacsfiles/lovelace-local-calendars-pro";
-    const cssHrefLocal = `${base}/event-calendar.min.css`;
-    if (!document.querySelector(`link[data-ec-css]`)) {
-      const linkLocal = document.createElement("link");
-      linkLocal.rel = "stylesheet";
-      linkLocal.href = cssHrefLocal;
-      linkLocal.setAttribute("data-ec-css", "1");
-      document.head.appendChild(linkLocal);
+    // 1) Load CSS text (local → CDN) and inject INTO ShadowRoot
+    const localCss = "/hacsfiles/lovelace-local-calendars-pro/event-calendar.min.css";
+    const cdnCss   = "https://cdn.jsdelivr.net/npm/@event-calendar/build@4.5.1/dist/event-calendar.min.css";
+    if (!this._ecCssText) {
+      try {
+        const r = await fetch(localCss, { cache: "force-cache" });
+        this._ecCssText = r.ok ? await r.text() : null;
+      } catch { /* ignore */ }
+      if (!this._ecCssText) {
+        const r2 = await fetch(cdnCss);
+        this._ecCssText = r2.ok ? await r2.text() : "/* failed to load EC CSS */";
+      }
     }
-    // Load JS: try local first; if it fails, fall back to CDN.
+    this._injectCssIntoShadow(this._ecCssText);
+
+    // 2) Load JS: try local, fallback to CDN
     if (!window.EventCalendar) {
       await new Promise((resolve) => {
+        const base = "/hacsfiles/lovelace-local-calendars-pro";
         const sLocal = document.createElement("script");
         sLocal.src = `${base}/event-calendar.min.js`;
         sLocal.onload = () => resolve();
@@ -80,15 +77,25 @@ class LocalCalendarsProCard extends HTMLElement {
           const sCdn = document.createElement("script");
           sCdn.src = "https://cdn.jsdelivr.net/npm/@event-calendar/build@4.5.1/dist/event-calendar.min.js";
           sCdn.onload = () => resolve();
-          sCdn.onerror = () => resolve(); // resolve anyway; we'll error later if EC missing
+          sCdn.onerror = () => resolve();
           document.head.appendChild(sCdn);
         };
         document.head.appendChild(sLocal);
       });
     }
     if (!window.EventCalendar) {
-      throw new Error("EventCalendar failed to load. Ensure the files are present in HACS or CDN is reachable.");
+      throw new Error("EventCalendar failed to load. Ensure assets exist or CDN is reachable.");
     }
+  }
+
+  _injectCssIntoShadow(cssText) {
+    if (!this.shadowRoot) return;
+    if (!this._styleTag) {
+      this._styleTag = document.createElement("style");
+      this._styleTag.setAttribute("data-ec-css", "1");
+      this.shadowRoot.appendChild(this._styleTag);
+    }
+    this._styleTag.textContent = cssText || "";
   }
 
   _render() {
@@ -111,18 +118,23 @@ class LocalCalendarsProCard extends HTMLElement {
         </div>
       </ha-card>
     `;
-    const container = this.shadowRoot.getElementById("container");
-    const legend = this.shadowRoot.getElementById("legend");
-    container.appendChild(this._container);
-    legend.appendChild(this._legend);
+    this.shadowRoot.getElementById("container").appendChild(this._container);
+    this.shadowRoot.getElementById("legend").appendChild(this._legend);
+    if (this._ecCssText) this._injectCssIntoShadow(this._ecCssText);
   }
 
   _toolbar() {
-    // IMPORTANT: 'start' and 'end' keys (not left/right)
     return {
       start: "prev,next today",
       center: "title",
       end: "dayGridMonth,timeGridWeek,timeGridDay"
+    };
+  }
+
+  _buttonText() {
+    return {
+      prev: "‹", next: "›", today: "today",
+      dayGridMonth: "month", timeGridWeek: "week", timeGridDay: "day"
     };
   }
 
@@ -131,6 +143,7 @@ class LocalCalendarsProCard extends HTMLElement {
     const opts = {
       view: this._config.default_view,
       headerToolbar: this._toolbar(),
+      buttonText: this._buttonText(),
       locale: this._config.locale || "en",
       height: "auto",
       events: [],
@@ -167,7 +180,6 @@ class LocalCalendarsProCard extends HTMLElement {
       this._eventsCache.set(key, merged);
       this._ec.setOption("events", merged);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to fetch calendar events:", err);
     }
   }
@@ -182,14 +194,13 @@ class LocalCalendarsProCard extends HTMLElement {
       title: ev.summary || ev.title || "(untitled)",
       start, end, allDay: !!isAllDay,
       backgroundColor: colors.bg,
-      color: colors.bg,      // border/accents
+      color: colors.bg,
       textColor: colors.text,
       extendedProps: { entity_id: entityId }
     };
   }
 
   _hashColor(str) {
-    // Deterministic HSL color from a string
     let h = 0; for (let i=0;i<str.length;i++) h = Math.imul(31, h) + str.charCodeAt(i) | 0;
     const hue = Math.abs(h) % 360; const sat = 65; const light = 48;
     return `hsl(${hue} ${sat}% ${light}%)`;
@@ -222,5 +233,4 @@ class LocalCalendarsProCard extends HTMLElement {
     this.dispatchEvent(ev); return ev;
   }
 }
-
 customElements.define("local-calendars-pro", LocalCalendarsProCard);
